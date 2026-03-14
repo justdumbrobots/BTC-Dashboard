@@ -362,7 +362,7 @@
           <div class="panel-title">LIVE PRICE <span id="stale-badge">CACHED</span></div>
           <div class="price-row">
             <span id="price-main">$——</span>
-            <span class="badge">BINANCE</span>
+            <span class="badge" id="exchange-badge">——</span>
             <span id="price-change" class="neu">——%</span>
           </div>
           <div class="momentum-strip">
@@ -495,9 +495,14 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
+// Binance (fastest, but geo-blocked in some regions e.g. US)
 const BINANCE_TICKER = 'https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT';
 const BINANCE_KLINES = 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=48';
 const BINANCE_DEPTH  = 'https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20';
+// Kraken fallback (globally accessible, CORS-enabled, same data)
+const KRAKEN_TICKER  = 'https://api.kraken.com/0/public/Ticker?pair=XBTUSD';
+const KRAKEN_OHLC    = 'https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=15';
+const KRAKEN_DEPTH   = 'https://api.kraken.com/0/public/Depth?pair=XBTUSD&count=20';
 const BLOCKCHAIN_STATS = 'https://api.blockchain.info/stats';
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
@@ -624,14 +629,74 @@ function showError(msg) {
 }
 
 // ── Direct API calls ──────────────────────────────────────────────────────────
-async function fetchMarketData() {
-  const [ticker, klines, depth, chain] = await Promise.all([
-    fetch(BINANCE_TICKER).then(r => { if (!r.ok) throw new Error('Binance ticker ' + r.status); return r.json(); }),
-    fetch(BINANCE_KLINES).then(r => { if (!r.ok) throw new Error('Binance klines ' + r.status); return r.json(); }),
-    fetch(BINANCE_DEPTH).then(r  => { if (!r.ok) throw new Error('Binance depth '  + r.status); return r.json(); }),
-    fetch(BLOCKCHAIN_STATS).then(r => r.json()).catch(() => null),
+async function fetchFromBinance() {
+  const [ticker, klines, depth] = await Promise.all([
+    fetch(BINANCE_TICKER).then(r => { if (!r.ok) throw new Error('ticker ' + r.status); return r.json(); }),
+    fetch(BINANCE_KLINES).then(r => { if (!r.ok) throw new Error('klines ' + r.status); return r.json(); }),
+    fetch(BINANCE_DEPTH).then(r  => { if (!r.ok) throw new Error('depth '  + r.status); return r.json(); }),
   ]);
-  return { ticker, klines, depth, chain };
+  return { ticker, klines, depth, _exchange: 'BINANCE' };
+}
+
+// Normalize Kraken responses to Binance-compatible internal format
+async function fetchFromKraken() {
+  const [tkRes, ohlcRes, depthRes] = await Promise.all([
+    fetch(KRAKEN_TICKER).then(r => { if (!r.ok) throw new Error('Kraken ticker ' + r.status); return r.json(); }),
+    fetch(KRAKEN_OHLC).then(r   => { if (!r.ok) throw new Error('Kraken ohlc '   + r.status); return r.json(); }),
+    fetch(KRAKEN_DEPTH).then(r  => { if (!r.ok) throw new Error('Kraken depth '  + r.status); return r.json(); }),
+  ]);
+
+  if (tkRes.error?.length)   throw new Error('Kraken: ' + tkRes.error[0]);
+  if (ohlcRes.error?.length) throw new Error('Kraken: ' + ohlcRes.error[0]);
+
+  // Kraken result keys can be XXBTZUSD or XBTUSD — grab the first one
+  const tkData    = Object.values(tkRes.result)[0];
+  const ohlcData  = Object.values(ohlcRes.result).find(v => Array.isArray(v));
+  const depthData = Object.values(depthRes.result)[0];
+
+  const lastPrice = parseFloat(tkData.c[0]);
+  const openPrice = parseFloat(tkData.o);
+  const pctChange = ((lastPrice - openPrice) / openPrice * 100);
+
+  // Ticker → Binance-compatible shape
+  const ticker = {
+    lastPrice:          lastPrice.toString(),
+    priceChangePercent: pctChange.toFixed(4),
+    quoteVolume:        (parseFloat(tkData.v[1]) * lastPrice).toFixed(2),
+    highPrice:          tkData.h[1],
+    lowPrice:           tkData.l[1],
+  };
+
+  // OHLC → Binance klines format [openTime, open, high, low, close, volume, ...]
+  // Kraken: [time, open, high, low, close, vwap, volume, count]
+  const klines = ohlcData.slice(-48).map(c => [
+    c[0] * 1000, // ms
+    c[1], c[2], c[3], c[4], // o h l c
+    c[6],        // volume
+    c[0] * 1000 + 900000, // closeTime
+    '0', 0, '0', '0', '0',
+  ]);
+
+  // Depth → Binance shape [[price, qty], ...]
+  const depth = {
+    bids: depthData.bids.map(([p, v]) => [p, v]),
+    asks: depthData.asks.map(([p, v]) => [p, v]),
+  };
+
+  return { ticker, klines, depth, _exchange: 'KRAKEN' };
+}
+
+async function fetchMarketData() {
+  const chain = fetch(BLOCKCHAIN_STATS).then(r => r.json()).catch(() => null);
+  let market;
+  try {
+    market = await fetchFromBinance();
+  } catch (e) {
+    console.warn('Binance unavailable (' + e.message + '), switching to Kraken');
+    market = await fetchFromKraken();
+  }
+  market.chain = await chain;
+  return market;
 }
 
 async function callClaude(messages, tools, maxTokens = 1024) {
@@ -772,6 +837,7 @@ function renderMarket(data) {
   const chgEl = document.getElementById('price-change');
   chgEl.textContent = fmtPct(chg); chgEl.className = colorClass(chg);
 
+  document.getElementById('exchange-badge').textContent = data._exchange || 'LIVE';
   document.getElementById('stale-badge').classList.toggle('show', !!data.__stale);
   setDot(data.__stale ? 'stale' : 'live');
 
