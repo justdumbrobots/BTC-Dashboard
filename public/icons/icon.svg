@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="80" fill="#050a0f"/>
+  <!-- Outer ring -->
+  <circle cx="256" cy="256" r="210" fill="none" stroke="#1a3a5c" stroke-width="6"/>
+  <!-- Inner cyan ring -->
+  <circle cx="256" cy="256" r="195" fill="none" stroke="#00d4ff" stroke-width="2" opacity="0.4"/>
+  <!-- Bitcoin ₿ symbol -->
+  <!-- Vertical stem top -->
+  <rect x="234" y="100" width="18" height="30" rx="4" fill="#00d4ff"/>
+  <!-- Vertical stem bottom -->
+  <rect x="234" y="378" width="18" height="34" rx="4" fill="#00d4ff"/>
+  <!-- Left vertical bar -->
+  <rect x="175" y="130" width="22" height="252" rx="6" fill="#00d4ff"/>
+  <!-- Top bump (upper B) -->
+  <path d="M197 130 h75 a52 52 0 0 1 0 104 h-75 Z" fill="#00d4ff"/>
+  <path d="M197 148 h70 a34 34 0 0 1 0 68 h-70 Z" fill="#050a0f"/>
+  <!-- Bottom bump (lower B) -->
+  <path d="M197 234 h82 a58 58 0 0 1 0 116 h-82 Z" fill="#00d4ff"/>
+  <path d="M197 253 h78 a39 39 0 0 1 0 78 h-78 Z" fill="#050a0f"/>
+  <!-- Second stem left offset -->
+  <rect x="208" y="130" width="14" height="252" rx="4" fill="#00d4ff"/>
+  <!-- Glow dot bottom-right -->
+  <circle cx="360" cy="370" r="12" fill="#00d4ff" opacity="0.6"/>
+  <circle cx="360" cy="370" r="6" fill="#00d4ff"/>
+</svg>
