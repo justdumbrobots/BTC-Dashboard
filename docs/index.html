@@ -917,6 +917,192 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
 }
 
+// ── Algorithmic TA Engine (no API key required) ───────────────────────────────
+function calcEMA(data, period) {
+  const k = 2 / (period + 1);
+  let val = data.slice(0, period).reduce((a, b) => a + b) / period;
+  for (let i = period; i < data.length; i++) val = data[i] * k + val * (1 - k);
+  return val;
+}
+
+function calcRSI(closes, period = 14) {
+  if (closes.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d > 0) gains += d; else losses -= d;
+  }
+  let ag = gains / period, al = losses / period;
+  if (al === 0) return 100;
+  return 100 - 100 / (1 + ag / al);
+}
+
+function calcMACD(closes) {
+  if (closes.length < 35) return { line: 0, signal: 0, histogram: 0, crossingUp: false, crossingDown: false };
+  const e12 = (n) => { const k = 2/13; let v = closes.slice(0,12).reduce((a,b)=>a+b)/12; for(let i=12;i<n;i++) v=closes[i]*k+v*(1-k); return v; };
+  const e26 = (n) => { const k = 2/27; let v = closes.slice(0,26).reduce((a,b)=>a+b)/26; for(let i=26;i<n;i++) v=closes[i]*k+v*(1-k); return v; };
+  const n = closes.length;
+  const macdNow  = e12(n)   - e26(n);
+  const macdPrev = e12(n-1) - e26(n-1);
+  // Build 9-point signal from last 9 MACD values
+  const macdSeries = Array.from({length: 9}, (_, i) => e12(n-8+i) - e26(n-8+i));
+  const signal = macdSeries.reduce((a, b) => a + b) / 9;
+  const signalPrev = Array.from({length: 9}, (_, i) => e12(n-9+i) - e26(n-9+i)).reduce((a,b)=>a+b)/9;
+  return {
+    line: macdNow, signal,
+    histogram: macdNow - signal,
+    crossingUp:   macdPrev < signalPrev && macdNow > signal,
+    crossingDown: macdPrev > signalPrev && macdNow < signal,
+  };
+}
+
+function calcBollinger(closes, period = 20) {
+  const slice = closes.slice(-period);
+  const mean  = slice.reduce((a, b) => a + b) / period;
+  const std   = Math.sqrt(slice.reduce((s, v) => s + (v - mean) ** 2, 0) / period);
+  return { upper: mean + 2 * std, middle: mean, lower: mean - 2 * std, std, mean };
+}
+
+function findSupportResistance(klines) {
+  const closes = klines.map(k => parseFloat(k[4]));
+  const highs  = klines.map(k => parseFloat(k[2]));
+  const lows   = klines.map(k => parseFloat(k[3]));
+  const price  = closes[closes.length - 1];
+  const nearRes = [...highs].sort((a, b) => a - b).find(h => h > price * 1.001);
+  const nearSup = [...lows].sort((a, b) => b - a).find(l => l < price * 0.999);
+  const level = nearRes && nearSup
+    ? (nearRes - price < price - nearSup ? nearRes : nearSup)
+    : nearRes || nearSup || price;
+  return '$' + Math.round(level).toLocaleString();
+}
+
+function generateAlgoPrediction(marketData) {
+  const { ticker, klines, depth } = marketData;
+  const closes  = klines.map(k => parseFloat(k[4]));
+  const price   = closes[closes.length - 1];
+  const chg24h  = parseFloat(ticker.priceChangePercent);
+
+  const rsi  = calcRSI(closes);
+  const macd = calcMACD(closes);
+  const bb   = calcBollinger(closes);
+  const sma20 = closes.slice(-20).reduce((a, b) => a + b) / 20;
+  const sma10 = closes.slice(-10).reduce((a, b) => a + b) / 10;
+
+  const mom15 = (closes[closes.length-1] - closes[closes.length-2]) / closes[closes.length-2] * 100;
+  const mom1h  = (closes[closes.length-1] - closes[closes.length-5]) / closes[closes.length-5] * 100;
+  const mom6h  = (closes[closes.length-1] - closes[closes.length-25]) / closes[closes.length-25] * 100;
+
+  const bidVol = depth.bids.reduce((s,[,q]) => s + parseFloat(q), 0);
+  const askVol = depth.asks.reduce((s,[,q]) => s + parseFloat(q), 0);
+  const bidPct = bidVol / (bidVol + askVol) * 100;
+  const bbPos  = Math.max(0, Math.min(100, (price - bb.lower) / (bb.upper - bb.lower) * 100));
+
+  // Score signals (neutral = 5, range 0-10)
+  let score = 5;
+  const signals = [];
+  if (rsi > 70)  { score -= 0.5; signals.push(`RSI overbought at ${rsi.toFixed(1)} — watch for pullback`); }
+  else if (rsi < 30) { score += 0.5; signals.push(`RSI oversold at ${rsi.toFixed(1)} — bounce possible`); }
+  else if (rsi > 55) { score += 1;   signals.push(`RSI bullish at ${rsi.toFixed(1)}`); }
+  else if (rsi < 45) { score -= 1;   signals.push(`RSI bearish at ${rsi.toFixed(1)}`); }
+
+  if (price > sma20) { score += 1; signals.push('Price above 20-period SMA'); }
+  else               { score -= 1; signals.push('Price below 20-period SMA'); }
+  if (price > sma10) score += 0.5; else score -= 0.5;
+
+  if (macd.crossingUp)   { score += 1.5; signals.push('MACD bullish crossover signal'); }
+  else if (macd.crossingDown) { score -= 1.5; signals.push('MACD bearish crossover signal'); }
+  else if (macd.histogram > 0) { score += 0.8; signals.push('MACD histogram positive'); }
+  else                         { score -= 0.8; signals.push('MACD histogram negative'); }
+
+  if (mom1h > 0.15)  { score += 0.8; signals.push(`1h momentum +${mom1h.toFixed(2)}%`); }
+  else if (mom1h < -0.15) { score -= 0.8; signals.push(`1h momentum ${mom1h.toFixed(2)}%`); }
+  if (mom6h > 0.3)  score += 0.5; else if (mom6h < -0.3) score -= 0.5;
+
+  if (bidPct > 54) { score += 0.5; signals.push(`Order book buy pressure ${bidPct.toFixed(1)}%`); }
+  else if (bidPct < 46) { score -= 0.5; signals.push(`Order book sell pressure ${(100-bidPct).toFixed(1)}%`); }
+  if (bbPos > 85) { score -= 0.5; signals.push('Near upper Bollinger Band'); }
+  else if (bbPos < 15) { score += 0.5; signals.push('Near lower Bollinger Band'); }
+  if (chg24h > 1.5) score += 0.3; else if (chg24h < -1.5) score -= 0.3;
+
+  score = Math.max(0, Math.min(10, score));
+  const decisive   = Math.abs(score - 5);
+  const direction  = score >= 6.0 ? 'BULLISH' : score <= 4.0 ? 'BEARISH' : 'SIDEWAYS';
+  const strength   = decisive >= 2.5 ? 'STRONG' : decisive >= 1.0 ? 'MODERATE' : 'WEAK';
+  const momentum   = Math.round(score / 10 * 100);
+  const duration   = strength === 'STRONG' ? '2-4 hours' : strength === 'MODERATE' ? '30-90 min' : '15-30 min';
+  const keyLevel   = findSupportResistance(klines);
+
+  const description = [
+    `Price is ${price > sma20 ? 'above' : 'below'} the 20-period SMA ($${Math.round(sma20).toLocaleString()}).`,
+    macd.crossingUp ? 'MACD just crossed bullish — momentum shift in progress.' :
+    macd.crossingDown ? 'MACD just crossed bearish — momentum shift detected.' :
+    `MACD histogram ${macd.histogram > 0 ? 'positive' : 'negative'}, ${macd.histogram > 0 ? 'supporting' : 'weighing on'} momentum.`,
+    `Bollinger Band position at ${bbPos.toFixed(0)}% with ${bidPct.toFixed(1)}% bid-side order book pressure.`,
+  ].join(' ');
+
+  // Predict short-term price move
+  const vol = bb.std / price * 100;
+  const baseMove15   = direction === 'BULLISH' ? Math.max(0.05, Math.min(0.3, vol * 0.15 + decisive * 0.03))
+                     : direction === 'BEARISH' ? -Math.max(0.05, Math.min(0.3, vol * 0.15 + decisive * 0.03))
+                     : mom15 * 0.25;
+  const baseMoveHour = direction === 'BULLISH' ? Math.max(0.1, Math.min(0.8, vol * 0.4 + decisive * 0.08))
+                     : direction === 'BEARISH' ? -Math.max(0.1, Math.min(0.8, vol * 0.4 + decisive * 0.08))
+                     : mom1h * 0.3;
+
+  const dir15   = Math.abs(baseMove15)   < 0.03 ? 'NEUTRAL' : baseMove15   > 0 ? 'UP' : 'DOWN';
+  const dirHour = Math.abs(baseMoveHour) < 0.05 ? 'NEUTRAL' : baseMoveHour > 0 ? 'UP' : 'DOWN';
+  const conf15   = Math.round(Math.min(72, 42 + decisive * 7));
+  const confHour = Math.round(Math.min(65, 36 + decisive * 6));
+  const al = (d, dir) => d === 'UP' && dir === 'BULLISH' ? 'WITH' : d === 'DOWN' && dir === 'BEARISH' ? 'WITH' : d === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST';
+
+  const reasoning = `Algorithmic TA: RSI(14)=${rsi.toFixed(1)}, MACD histogram=${macd.histogram > 0 ? '+':''}${macd.histogram.toFixed(2)}, price ${price > sma20 ? 'above' : 'below'} SMA20 ($${Math.round(sma20).toLocaleString()}), BB position ${bbPos.toFixed(0)}% (${Math.round(bb.lower).toLocaleString()}–${Math.round(bb.upper).toLocaleString()}), bid pressure ${bidPct.toFixed(1)}%. Momentum: 15m=${mom15.toFixed(3)}%, 1h=${mom1h.toFixed(3)}%, 6h=${mom6h.toFixed(3)}%. Add Anthropic API key (⚙ KEY) for AI analysis with live web search.`;
+
+  return {
+    _algo: true,
+    trend: { direction, strength, duration, momentum, key_level: keyLevel, description },
+    pred_15:   { price: price*(1+baseMove15/100),   direction: dir15,   confidence: conf15,   change_pct: baseMove15,   trend_alignment: al(dir15,   direction) },
+    pred_hour: { price: price*(1+baseMoveHour/100), direction: dirHour, confidence: confHour, change_pct: baseMoveHour, trend_alignment: al(dirHour, direction) },
+    signals:   signals.slice(0, 4),
+    headlines: ['Add Anthropic API key (⚙ KEY) for live news headlines via web search.'],
+    reasoning,
+  };
+}
+
+function runLocalBacktest(klines) {
+  const candles = klines.map(k => ({
+    t: new Date(k[0]).toISOString().slice(11, 16),
+    c: parseFloat(k[4]),
+  }));
+  const trades = [];
+  let i = 2;
+  while (i < candles.length - 2) {
+    const [c0, c1, c2] = [candles[i-2].c, candles[i-1].c, candles[i].c];
+    if (c2 > c1 && c1 > c0) {
+      const entry = c2, exit = candles[i+2].c;
+      const pnl = (exit - entry) / entry * 100;
+      trades.push({ entry_time: candles[i].t, direction: 'LONG', entry_price: entry, exit_price: exit, pnl_pct: pnl, result: pnl > 0 ? 'WIN' : 'LOSS' });
+      i += 3;
+    } else if (c2 < c1 && c1 < c0) {
+      const entry = c2, exit = candles[i+2].c;
+      const pnl = (entry - exit) / entry * 100;
+      trades.push({ entry_time: candles[i].t, direction: 'SHORT', entry_price: entry, exit_price: exit, pnl_pct: pnl, result: pnl > 0 ? 'WIN' : 'LOSS' });
+      i += 3;
+    } else { i++; }
+  }
+  const wins  = trades.filter(t => t.result === 'WIN');
+  const losses= trades.filter(t => t.result === 'LOSS');
+  const totalPnl = trades.reduce((s, t) => s + t.pnl_pct, 0);
+  const avgWin   = wins.length   ? wins.reduce((s,t)   => s + t.pnl_pct, 0) / wins.length   : 0;
+  const avgLoss  = losses.length ? losses.reduce((s,t) => s + t.pnl_pct, 0) / losses.length : 0;
+  const winRate  = trades.length ? wins.length / trades.length : 0;
+  const assessment = `Momentum strategy executed ${trades.length} trades over the 12-hour window with a ${(winRate*100).toFixed(1)}% win rate and ${totalPnl >= 0?'+':''}${totalPnl.toFixed(3)}% total PnL. ${winRate > 0.55 ? 'Strategy shows positive edge in the current regime.' : winRate > 0.45 ? 'Near-neutral performance — market lacks strong directional momentum.' : 'Strategy underperformed — market conditions may not suit momentum approaches.'}`;
+  return {
+    trades,
+    summary: { total_trades: trades.length, wins: wins.length, losses: losses.length, win_rate: winRate, total_pnl_pct: totalPnl, avg_win_pct: avgWin, avg_loss_pct: avgLoss, best_trade_pct: trades.length ? Math.max(...trades.map(t=>t.pnl_pct)) : 0, worst_trade_pct: trades.length ? Math.min(...trades.map(t=>t.pnl_pct)) : 0 },
+    assessment,
+  };
+}
+
 // ── Main load ─────────────────────────────────────────────────────────────────
 async function loadAll() {
   const btn = document.getElementById('refresh-btn');
@@ -931,7 +1117,7 @@ async function loadAll() {
     cachedMarket = await fetchMarketData();
     setPhase('phase-market','done');
 
-    // Phase 2: AI prediction via Anthropic API
+    // Phase 2: prediction — AI if key set, else algorithmic TA
     setPhase('phase-ai','active');
     let prediction = null;
     if (getApiKey()) {
@@ -943,10 +1129,13 @@ async function loadAll() {
         );
         prediction = parseJson(extractText(msg));
       } catch (e) {
-        showError('AI prediction: ' + e.message);
+        console.warn('AI failed, falling back to algo:', e.message);
+        showError('AI unavailable — using algorithmic analysis instead.');
+        prediction = generateAlgoPrediction(cachedMarket);
       }
     } else {
-      showError('No API key — market data loaded but AI predictions skipped. Click ⚙ KEY to configure.');
+      // No key: run instant algorithmic analysis
+      prediction = generateAlgoPrediction(cachedMarket);
     }
     setPhase('phase-ai','done');
 
@@ -966,37 +1155,39 @@ async function loadAll() {
 // ── Backtest ──────────────────────────────────────────────────────────────────
 async function runBacktest() {
   if (!cachedMarket) { showError('Refresh market data first.'); return; }
-  if (!getApiKey())  { showError('No API key set. Click ⚙ KEY to configure.'); return; }
 
   const btn = document.getElementById('run-backtest');
   btn.disabled = true; btn.textContent = '⟳ RUNNING…';
   const ph = document.getElementById('bt-placeholder');
-  ph.textContent = 'Running backtest with Claude AI…'; ph.style.display = 'block';
   document.getElementById('bt-results').style.display = 'none';
 
   try {
-    const candles = cachedMarket.klines.map(k => ({
-      t: new Date(k[0]).toISOString().slice(11,16),
-      o: parseFloat(k[1]).toFixed(2), h: parseFloat(k[2]).toFixed(2),
-      l: parseFloat(k[3]).toFixed(2), c: parseFloat(k[4]).toFixed(2),
-      v: parseFloat(k[5]).toFixed(2),
-    }));
-
-    const prompt = `You are a quant analyst. Backtest a simple momentum strategy on these 48x15m BTC candles:
+    let data;
+    if (getApiKey()) {
+      ph.textContent = 'Running backtest with Claude AI…'; ph.style.display = 'block';
+      const candles = cachedMarket.klines.map(k => ({
+        t: new Date(k[0]).toISOString().slice(11,16),
+        o: parseFloat(k[1]).toFixed(2), h: parseFloat(k[2]).toFixed(2),
+        l: parseFloat(k[3]).toFixed(2), c: parseFloat(k[4]).toFixed(2),
+        v: parseFloat(k[5]).toFixed(2),
+      }));
+      const prompt = `You are a quant analyst. Backtest a simple momentum strategy on these 48x15m BTC candles:
 RULE: Enter LONG when 3 consecutive closes rise; enter SHORT when 3 consecutive closes fall. Exit after 2 candles.
-
-CANDLES (time, open, high, low, close, volume):
-${candles.map(c => `${c.t} O=${c.o} H=${c.h} L=${c.l} C=${c.c} V=${c.v}`).join('\n')}
-
-Return ONLY a JSON object:
-{
-  "trades": [{"entry_time":"HH:MM","direction":"LONG|SHORT","entry_price":number,"exit_price":number,"pnl_pct":float,"result":"WIN|LOSS"}],
-  "summary": {"total_trades":number,"wins":number,"losses":number,"win_rate":float,"total_pnl_pct":float,"avg_win_pct":float,"avg_loss_pct":float,"best_trade_pct":float,"worst_trade_pct":float},
-  "assessment":"<2-3 sentences>"
-}`;
-
-    const msg  = await callClaude([{ role: 'user', content: prompt }], null, 2048);
-    const data = parseJson(extractText(msg));
+CANDLES: ${candles.map(c=>`${c.t} O=${c.o} H=${c.h} L=${c.l} C=${c.c}`).join(' | ')}
+Return ONLY JSON: {"trades":[{"entry_time":"HH:MM","direction":"LONG|SHORT","entry_price":number,"exit_price":number,"pnl_pct":float,"result":"WIN|LOSS"}],"summary":{"total_trades":number,"wins":number,"losses":number,"win_rate":float,"total_pnl_pct":float,"avg_win_pct":float,"avg_loss_pct":float,"best_trade_pct":float,"worst_trade_pct":float},"assessment":"<2-3 sentences>"}`;
+      try {
+        const msg = await callClaude([{ role: 'user', content: prompt }], null, 2048);
+        data = parseJson(extractText(msg));
+      } catch (e) {
+        console.warn('AI backtest failed, using local engine:', e.message);
+        data = runLocalBacktest(cachedMarket.klines);
+      }
+    } else {
+      ph.textContent = 'Running algorithmic backtest…'; ph.style.display = 'block';
+      // Small delay so the user sees the loading state
+      await new Promise(r => setTimeout(r, 300));
+      data = runLocalBacktest(cachedMarket.klines);
+    }
     const s    = data.summary;
     const wr   = parseFloat(s.win_rate);
     const pnl  = parseFloat(s.total_pnl_pct);
