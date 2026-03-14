@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>BTC Terminal</title>
+
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#050a0f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="BTC Terminal" />
+  <link rel="apple-touch-icon" href="./icons/icon.svg" />
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
+  <meta name="description" content="Live Bitcoin dashboard with AI-powered predictions. Runs entirely in your browser." />
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:     #050a0f;
+      --bg2:    #0a1520;
+      --bg3:    #0f1e2e;
+      --border: #1a3a5c;
+      --cyan:   #00d4ff;
+      --cyan2:  #00a8cc;
+      --green:  #00ff88;
+      --red:    #ff3366;
+      --yellow: #ffd700;
+      --muted:  #4a7a9b;
+      --text:   #c8e6f5;
+      --sat: env(safe-area-inset-top,    0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left,   0px);
+      --sar: env(safe-area-inset-right,  0px);
+    }
+
+    html, body {
+      height: 100%; background: var(--bg); color: var(--text);
+      font-family: 'Courier New', Courier, monospace; font-size: 13px;
+      overscroll-behavior: none;
+    }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── System banners ── */
+    .sys-banner {
+      display: none; padding: 5px 16px; font-size: 10px;
+      letter-spacing: 1px; text-align: center; cursor: default;
+    }
+    .sys-banner.show { display: block; }
+    #offline-banner { background: rgba(255,215,0,.08); border-bottom: 1px solid var(--yellow); color: var(--yellow); }
+    #update-banner  { background: rgba(0,212,255,.08);  border-bottom: 1px solid var(--cyan);   color: var(--cyan); cursor: pointer; }
+    #nokey-banner   { background: rgba(255,215,0,.08); border-bottom: 1px solid var(--yellow); color: var(--yellow); cursor: pointer; }
+
+    /* ── Layout ── */
+    #app {
+      display: flex; flex-direction: column; min-height: 100vh;
+      padding-top: var(--sat); padding-bottom: var(--sab);
+      padding-left: var(--sal); padding-right: var(--sar);
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 20px; border-bottom: 1px solid var(--border);
+      background: var(--bg2); position: sticky; top: 0; z-index: 100;
+    }
+    .logo { color: var(--cyan); font-size: 16px; font-weight: bold; letter-spacing: 3px; user-select: none; }
+    .logo span { color: var(--yellow); }
+    .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    #clock { color: var(--muted); font-size: 10px; }
+    #status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    #status-dot.live    { background: var(--green);  box-shadow: 0 0 6px var(--green);  animation: pulse 2s infinite; }
+    #status-dot.stale   { background: var(--yellow); }
+    #status-dot.offline { background: var(--red); }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+    .hbtn {
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+      padding: 5px 11px; cursor: pointer; font-family: inherit; font-size: 11px;
+      letter-spacing: 1px; transition: all .2s; white-space: nowrap;
+    }
+    .hbtn.cyan   { border-color: var(--cyan);   color: var(--cyan); }
+    .hbtn.yellow { border-color: var(--yellow);  color: var(--yellow); }
+    .hbtn:hover  { background: var(--cyan); color: var(--bg); border-color: var(--cyan); }
+    .hbtn.yellow:hover { background: var(--yellow); color: var(--bg); border-color: var(--yellow); }
+    .hbtn:disabled { opacity: .4; cursor: not-allowed; }
+    .hbtn:disabled:hover { background: transparent; color: var(--muted); border-color: var(--border); }
+    #install-btn { display: none; }
+    /* key indicator dot */
+    #key-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); flex-shrink: 0; title: 'No API key set'; }
+    #key-dot.set { background: var(--green); }
+
+    /* ── Settings modal ── */
+    #settings-modal {
+      display: none; position: fixed; inset: 0; z-index: 200;
+      align-items: center; justify-content: center;
+    }
+    #settings-modal.open { display: flex; }
+    .modal-overlay { position: absolute; inset: 0; background: rgba(5,10,15,.85); }
+    .modal-box {
+      position: relative; background: var(--bg2); border: 1px solid var(--border);
+      padding: 24px; width: 90%; max-width: 420px; z-index: 1;
+    }
+    .modal-title { color: var(--cyan); font-size: 12px; letter-spacing: 2px; margin-bottom: 18px; }
+    .setting-label { font-size: 10px; color: var(--muted); letter-spacing: 1px; display: block; margin-bottom: 6px; }
+    .key-row { display: flex; gap: 0; }
+    .key-row input {
+      flex: 1; background: var(--bg3); border: 1px solid var(--border); border-right: none;
+      color: var(--text); padding: 8px 10px; font-family: inherit; font-size: 12px;
+      outline: none;
+    }
+    .key-row input:focus { border-color: var(--cyan); }
+    .key-row input::placeholder { color: var(--muted); }
+    .key-toggle {
+      background: var(--bg3); border: 1px solid var(--border); color: var(--muted);
+      padding: 0 10px; cursor: pointer; font-family: inherit; font-size: 10px;
+      letter-spacing: 1px;
+    }
+    .key-toggle:hover { color: var(--cyan); border-color: var(--cyan); }
+    .setting-hint { font-size: 10px; color: var(--muted); margin-top: 8px; margin-bottom: 16px; line-height: 1.5; }
+    .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .modal-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+      padding: 6px 16px; cursor: pointer; font-family: inherit; font-size: 11px;
+      letter-spacing: 1px; transition: all .2s;
+    }
+    .modal-btn.primary { border-color: var(--cyan);   color: var(--cyan); }
+    .modal-btn.danger  { border-color: var(--red);    color: var(--red); margin-left: auto; }
+    .modal-btn:hover   { background: var(--cyan);   color: var(--bg); border-color: var(--cyan); }
+    .modal-btn.danger:hover { background: var(--red); color: var(--bg); border-color: var(--red); }
+
+    /* ── Tabs ── */
+    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg2); }
+    .tab {
+      padding: 8px 20px; cursor: pointer; color: var(--muted); font-size: 11px;
+      letter-spacing: 1px; border-bottom: 2px solid transparent; transition: all .2s; user-select: none;
+    }
+    .tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+    .tab:hover:not(.active) { color: var(--text); }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ── Grid ── */
+    .main-grid {
+      display: grid; grid-template-columns: 1fr 320px;
+      gap: 1px; background: var(--border); flex: 1;
+    }
+    .left-col, .right-col {
+      background: var(--border); display: flex; flex-direction: column; gap: 1px;
+    }
+    .panel { background: var(--bg); padding: 14px 16px; }
+    .panel-title {
+      color: var(--muted); font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+      margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+    }
+    .panel-title::before { content: '▸'; color: var(--cyan); }
+
+    /* ── Price ── */
+    .price-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    #price-main { font-size: 30px; color: var(--cyan); font-weight: bold; }
+    .badge { font-size: 9px; padding: 2px 6px; border: 1px solid var(--cyan2); color: var(--cyan2); letter-spacing: 1px; }
+    #price-change { font-size: 14px; }
+    .pos { color: var(--green); } .neg { color: var(--red); } .neu { color: var(--muted); }
+
+    #stale-badge {
+      display: none; background: rgba(255,215,0,.1); border: 1px solid var(--yellow);
+      color: var(--yellow); padding: 2px 8px; font-size: 9px; letter-spacing: 1px;
+    }
+    #stale-badge.show { display: inline-block; }
+
+    /* ── Momentum ── */
+    .momentum-strip { display: flex; gap: 1px; margin-top: 6px; }
+    .mom-item { flex: 1; background: var(--bg3); padding: 6px 4px; text-align: center; min-width: 0; }
+    .mom-label { font-size: 9px; color: var(--muted); letter-spacing: 1px; }
+    .mom-val { font-size: 11px; margin-top: 2px; }
+
+    /* ── Chart ── */
+    #chart-container { padding: 14px 16px; background: var(--bg); flex: 1; min-height: 260px; }
+    #priceChart { width: 100% !important; }
+
+    /* ── Order book ── */
+    .ob-bar-labels { display: flex; justify-content: space-between; font-size: 10px; margin-bottom: 4px; }
+    .ob-bar { height: 16px; background: var(--bg3); border-radius: 2px; overflow: hidden; position: relative; }
+    .ob-bid { height: 100%; background: linear-gradient(90deg, var(--green), #00cc66); transition: width .6s; }
+    .ob-bar-center { position: absolute; left: 50%; top: 0; width: 1px; height: 100%; background: var(--border); }
+    .ob-stats { display: flex; justify-content: space-between; font-size: 10px; margin-top: 4px; color: var(--muted); }
+
+    /* ── On-chain ── */
+    .chain-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .chain-item { background: var(--bg3); padding: 6px 10px; }
+    .chain-key { font-size: 9px; color: var(--muted); letter-spacing: 1px; }
+    .chain-val { font-size: 12px; color: var(--text); margin-top: 2px; }
+
+    /* ── Trend ── */
+    .trend-direction { font-size: 20px; font-weight: bold; letter-spacing: 2px; margin-bottom: 8px; }
+    .trend-meta { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .tag { padding: 2px 7px; border: 1px solid var(--border); color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+    .tag.bullish { border-color: var(--green);  color: var(--green); }
+    .tag.bearish { border-color: var(--red);    color: var(--red); }
+    .tag.sideways{ border-color: var(--yellow); color: var(--yellow); }
+    .tag.strong  { border-color: var(--cyan);   color: var(--cyan); }
+    .gauge-wrap { margin: 10px 0; }
+    .gauge-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; display: flex; justify-content: space-between; }
+    .gauge-track { height: 12px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
+    .gauge-fill  { height: 100%; transition: width .6s, background .6s; border-radius: 2px; }
+    .trend-desc { font-size: 11px; color: var(--muted); line-height: 1.5; margin-top: 8px; }
+    .key-level  { margin-top: 8px; font-size: 11px; }
+    .key-level span { color: var(--yellow); }
+
+    /* ── Prediction cards ── */
+    .pred-cards { display: flex; flex-direction: column; gap: 1px; background: var(--border); }
+    .pred-card  { background: var(--bg); padding: 14px 16px; }
+    .pred-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .pred-timeframe { font-size: 10px; color: var(--muted); letter-spacing: 2px; }
+    .pred-alignment { font-size: 9px; padding: 2px 8px; letter-spacing: 1px; }
+    .align-with    { background: rgba(0,255,136,.12); border: 1px solid var(--green); color: var(--green); }
+    .align-against { background: rgba(255,51,102,.12); border: 1px solid var(--red);   color: var(--red); }
+    .align-neutral { background: rgba(255,215,0,.12);  border: 1px solid var(--yellow); color: var(--yellow); }
+    .pred-price  { font-size: 22px; font-weight: bold; color: var(--cyan); margin-bottom: 4px; }
+    .pred-change { font-size: 12px; margin-bottom: 8px; }
+    .conf-label  { font-size: 9px; color: var(--muted); display: flex; justify-content: space-between; margin-bottom: 3px; }
+    .conf-bar    { height: 6px; background: var(--bg3); border-radius: 1px; overflow: hidden; }
+    .conf-fill   { height: 100%; transition: width .6s; border-radius: 1px; }
+
+    /* ── Lists ── */
+    .signals-list { list-style: none; }
+    .signals-list li { padding: 5px 0; border-bottom: 1px solid var(--bg3); font-size: 11px; line-height: 1.4; }
+    .signals-list li::before { content: '◆ '; color: var(--cyan); font-size: 9px; }
+    .signals-list li:last-child { border-bottom: none; }
+    .headline-list { list-style: none; }
+    .headline-list li { padding: 6px 0; border-bottom: 1px solid var(--bg3); font-size: 11px; line-height: 1.4; color: var(--muted); }
+    .headline-list li::before { content: '» '; color: var(--yellow); }
+    .headline-list li:last-child { border-bottom: none; }
+    .reasoning-text { font-size: 11px; color: var(--muted); line-height: 1.6; }
+
+    /* ── Loading overlay ── */
+    #loading-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(5,10,15,.94);
+      z-index: 999; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+    }
+    #loading-overlay.show { display: flex; }
+    .loading-title { color: var(--cyan); font-size: 14px; letter-spacing: 3px; }
+    .loading-phases { display: flex; flex-direction: column; gap: 8px; min-width: 280px; }
+    .phase-item { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); }
+    .phase-item.active { color: var(--cyan); } .phase-item.done { color: var(--green); }
+    .phase-icon { width: 14px; text-align: center; }
+    .spinner { width: 40px; height: 40px; border: 2px solid var(--border); border-top-color: var(--cyan); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Backtest ── */
+    #backtest-panel { padding: 16px; }
+    .bt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+    #run-backtest { background: transparent; border: 1px solid var(--cyan); color: var(--cyan); padding: 6px 16px; cursor: pointer; font-family: inherit; font-size: 12px; letter-spacing: 1px; transition: all .2s; }
+    #run-backtest:hover { background: var(--cyan); color: var(--bg); }
+    #run-backtest:disabled { opacity: .4; cursor: not-allowed; }
+    .bt-summary { display: grid; grid-template-columns: repeat(5,1fr); gap: 6px; margin-bottom: 16px; }
+    .bt-stat { background: var(--bg3); padding: 10px; text-align: center; }
+    .bt-stat-label { font-size: 9px; color: var(--muted); letter-spacing: 1px; }
+    .bt-stat-val { font-size: 18px; color: var(--cyan); margin-top: 4px; font-weight: bold; }
+    .bt-stat-val.pos { color: var(--green); } .bt-stat-val.neg { color: var(--red); }
+    .bt-assessment { background: var(--bg3); padding: 12px; margin-bottom: 16px; font-size: 11px; color: var(--muted); line-height: 1.6; }
+    .bt-table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th { color: var(--muted); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 10px; letter-spacing: 1px; }
+    td { padding: 5px 8px; border-bottom: 1px solid var(--bg3); }
+    tr:hover td { background: var(--bg3); }
+    .win-badge { color: var(--green); } .loss-badge { color: var(--red); }
+    #bt-placeholder { color: var(--muted); text-align: center; padding: 40px; font-size: 12px; }
+
+    /* ── Error banner ── */
+    #error-banner {
+      display: none; background: rgba(255,51,102,.08); border: 1px solid var(--red);
+      color: var(--red); padding: 8px 16px; font-size: 11px; margin: 8px 16px;
+    }
+    #error-banner.show { display: block; }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+      .main-grid { grid-template-columns: 1fr; }
+      .bt-summary { grid-template-columns: repeat(3,1fr); }
+    }
+    @media (max-width: 500px) {
+      #price-main { font-size: 24px; } .logo { font-size: 14px; }
+      header { padding: 8px 12px; } .panel { padding: 12px; }
+      .bt-summary { grid-template-columns: repeat(2,1fr); } #clock { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Banners -->
+  <div id="update-banner"  class="sys-banner" onclick="applyUpdate()">↑ NEW VERSION AVAILABLE — TAP TO UPDATE</div>
+  <div id="offline-banner" class="sys-banner">⚡ OFFLINE — SHOWING CACHED DATA</div>
+  <div id="nokey-banner"   class="sys-banner" onclick="openSettings()">⚙ NO API KEY SET — AI PREDICTIONS DISABLED · TAP TO CONFIGURE</div>
+
+  <!-- Settings modal -->
+  <div id="settings-modal">
+    <div class="modal-overlay" onclick="closeSettings()"></div>
+    <div class="modal-box">
+      <div class="modal-title">⚙ SETTINGS</div>
+      <label class="setting-label">ANTHROPIC API KEY</label>
+      <div class="key-row">
+        <input type="password" id="api-key-input" placeholder="sk-ant-api03-…" autocomplete="off" spellcheck="false" />
+        <button class="key-toggle" id="key-toggle" onclick="toggleKeyVis()">SHOW</button>
+      </div>
+      <div class="setting-hint">
+        Stored in your browser's localStorage only — never sent to any third-party server.<br>
+        Get a key at <span style="color:var(--cyan)">console.anthropic.com</span>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn primary" onclick="saveSettings()">SAVE &amp; CLOSE</button>
+        <button class="modal-btn" onclick="closeSettings()">CANCEL</button>
+        <button class="modal-btn danger" onclick="clearKey()">CLEAR KEY</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <div class="loading-title">BTC TERMINAL</div>
+    <div class="loading-phases">
+      <div class="phase-item" id="phase-market"><span class="phase-icon">○</span> Fetching market data</div>
+      <div class="phase-item" id="phase-ai"><span class="phase-icon">○</span> AI analysis + web search</div>
+      <div class="phase-item" id="phase-render"><span class="phase-icon">○</span> Rendering dashboard</div>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header>
+    <div class="logo">₿TC <span>TERMINAL</span></div>
+    <div class="header-right">
+      <div id="clock">--:--:--</div>
+      <div id="key-dot" title="No API key — click ⚙ to set"></div>
+      <div id="status-dot"></div>
+      <button id="install-btn" class="hbtn yellow" onclick="installPWA()">⊕ INSTALL</button>
+      <button class="hbtn" onclick="openSettings()">⚙ KEY</button>
+      <button id="refresh-btn" class="hbtn cyan" onclick="loadAll()">⟳ REFRESH</button>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('dashboard')">DASHBOARD</div>
+    <div class="tab" onclick="switchTab('backtest')">BACKTEST</div>
+  </div>
+
+  <!-- Error banner -->
+  <div id="error-banner"></div>
+
+  <!-- Dashboard -->
+  <div id="tab-dashboard" class="tab-content active">
+    <div class="main-grid">
+      <div class="left-col">
+
+        <div class="panel">
+          <div class="panel-title">LIVE PRICE <span id="stale-badge">CACHED</span></div>
+          <div class="price-row">
+            <span id="price-main">$——</span>
+            <span class="badge">BINANCE</span>
+            <span id="price-change" class="neu">——%</span>
+          </div>
+          <div class="momentum-strip">
+            <div class="mom-item"><div class="mom-label">15M</div><div class="mom-val neu" id="mom-15">—</div></div>
+            <div class="mom-item"><div class="mom-label">1H</div><div class="mom-val neu"  id="mom-1h">—</div></div>
+            <div class="mom-item"><div class="mom-label">6H</div><div class="mom-val neu"  id="mom-6h">—</div></div>
+            <div class="mom-item"><div class="mom-label">12H</div><div class="mom-val neu" id="mom-12h">—</div></div>
+            <div class="mom-item"><div class="mom-label">24H</div><div class="mom-val neu" id="mom-24h">—</div></div>
+          </div>
+        </div>
+
+        <div id="chart-container">
+          <div class="panel-title">12H CHART · 15MIN CANDLES</div>
+          <canvas id="priceChart" height="210"></canvas>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">KEY SIGNALS</div>
+          <ul class="signals-list" id="signals-list"><li class="neu">Awaiting analysis…</li></ul>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">ANALYSIS</div>
+          <div class="reasoning-text" id="reasoning-text">Set your Anthropic API key (⚙ KEY) to enable AI analysis.</div>
+        </div>
+
+      </div>
+      <div class="right-col">
+
+        <div class="panel">
+          <div class="panel-title">ORDER BOOK PRESSURE</div>
+          <div class="ob-bar-labels"><span class="pos">BIDS</span><span class="neg">ASKS</span></div>
+          <div class="ob-bar">
+            <div class="ob-bid" id="ob-bid-bar" style="width:50%"></div>
+            <div class="ob-bar-center"></div>
+          </div>
+          <div class="ob-stats">
+            <span id="ob-bid-pct">50%</span><span id="ob-bid-vol">—</span>
+            <span id="ob-ask-vol">—</span><span id="ob-ask-pct">50%</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">ON-CHAIN · BLOCKCHAIN.COM</div>
+          <div class="chain-strip">
+            <div class="chain-item"><div class="chain-key">HASH RATE</div><div class="chain-val" id="chain-hash">—</div></div>
+            <div class="chain-item"><div class="chain-key">DIFFICULTY</div><div class="chain-val" id="chain-diff">—</div></div>
+            <div class="chain-item"><div class="chain-key">MEMPOOL</div><div class="chain-val" id="chain-mempool">—</div></div>
+            <div class="chain-item"><div class="chain-key">TX/SEC</div><div class="chain-val" id="chain-tps">—</div></div>
+            <div class="chain-item"><div class="chain-key">MARKET PRICE</div><div class="chain-val" id="chain-price">—</div></div>
+            <div class="chain-item"><div class="chain-key">BLOCKS TODAY</div><div class="chain-val" id="chain-blocks">—</div></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">CURRENT TREND</div>
+          <div class="trend-direction neu" id="trend-direction">AWAITING…</div>
+          <div class="trend-meta">
+            <span class="tag" id="trend-strength-tag">—</span>
+            <span class="tag" id="trend-dur-tag">—</span>
+          </div>
+          <div class="gauge-wrap">
+            <div class="gauge-label"><span>MOMENTUM</span><span id="gauge-val">—</span></div>
+            <div class="gauge-track"><div class="gauge-fill" id="gauge-fill" style="width:0%"></div></div>
+          </div>
+          <div class="key-level">KEY LEVEL: <span id="key-level">—</span></div>
+          <div class="trend-desc" id="trend-desc">Run prediction for trend analysis.</div>
+        </div>
+
+        <div class="pred-cards">
+          <div class="pred-card">
+            <div class="pred-header">
+              <span class="pred-timeframe">15-MIN FORECAST</span>
+              <span class="pred-alignment align-neutral" id="align-15">NEUTRAL</span>
+            </div>
+            <div class="pred-price" id="pred15-price">$——</div>
+            <div class="pred-change neu" id="pred15-change">——%</div>
+            <div class="conf-label"><span>CONFIDENCE</span><span id="conf15-val">—</span></div>
+            <div class="conf-bar"><div class="conf-fill" id="conf15-fill" style="width:0%;background:var(--cyan)"></div></div>
+          </div>
+          <div class="pred-card">
+            <div class="pred-header">
+              <span class="pred-timeframe">NEXT-HOUR FORECAST</span>
+              <span class="pred-alignment align-neutral" id="align-hour">NEUTRAL</span>
+            </div>
+            <div class="pred-price" id="predhour-price">$——</div>
+            <div class="pred-change neu" id="predhour-change">——%</div>
+            <div class="conf-label"><span>CONFIDENCE</span><span id="confhour-val">—</span></div>
+            <div class="conf-bar"><div class="conf-fill" id="confhour-fill" style="width:0%;background:var(--cyan)"></div></div>
+          </div>
+        </div>
+
+        <div class="panel" style="flex:1">
+          <div class="panel-title">HEADLINES</div>
+          <ul class="headline-list" id="headline-list"><li class="neu">Awaiting web search…</li></ul>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Backtest -->
+  <div id="tab-backtest" class="tab-content">
+    <div id="backtest-panel">
+      <div class="bt-header">
+        <div class="panel-title" style="margin:0">MOMENTUM STRATEGY BACKTEST · 48×15M</div>
+        <button id="run-backtest" onclick="runBacktest()">▶ RUN BACKTEST</button>
+      </div>
+      <div id="bt-placeholder">Load market data first, then run backtest.</div>
+      <div id="bt-results" style="display:none">
+        <div class="bt-summary">
+          <div class="bt-stat"><div class="bt-stat-label">TOTAL TRADES</div><div class="bt-stat-val" id="bt-total">—</div></div>
+          <div class="bt-stat"><div class="bt-stat-label">WIN RATE</div><div class="bt-stat-val" id="bt-winrate">—</div></div>
+          <div class="bt-stat"><div class="bt-stat-label">TOTAL PNL</div><div class="bt-stat-val" id="bt-pnl">—</div></div>
+          <div class="bt-stat"><div class="bt-stat-label">AVG WIN</div><div class="bt-stat-val pos" id="bt-avgwin">—</div></div>
+          <div class="bt-stat"><div class="bt-stat-label">AVG LOSS</div><div class="bt-stat-val neg" id="bt-avgloss">—</div></div>
+        </div>
+        <div class="bt-assessment" id="bt-assessment"></div>
+        <div class="bt-table-wrap">
+          <table>
+            <thead><tr><th>TIME</th><th>DIR</th><th>ENTRY</th><th>EXIT</th><th>PNL %</th><th>RESULT</th></tr></thead>
+            <tbody id="bt-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const BINANCE_TICKER = 'https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT';
+const BINANCE_KLINES = 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=48';
+const BINANCE_DEPTH  = 'https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20';
+const BLOCKCHAIN_STATS = 'https://api.blockchain.info/stats';
+const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+const LS_KEY = 'btc_terminal_api_key';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let cachedMarket  = null;
+let priceChart    = null;
+let swReg         = null;
+let installPrompt = null;
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toUTCString().slice(17, 25) + ' UTC';
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── API Key management ────────────────────────────────────────────────────────
+function getApiKey() { return localStorage.getItem(LS_KEY) || ''; }
+
+function updateKeyIndicator() {
+  const hasKey = !!getApiKey();
+  document.getElementById('key-dot').className = hasKey ? 'set' : '';
+  document.getElementById('nokey-banner').classList.toggle('show', !hasKey);
+}
+
+function openSettings() {
+  document.getElementById('api-key-input').value = getApiKey();
+  document.getElementById('settings-modal').classList.add('open');
+}
+function closeSettings() {
+  document.getElementById('settings-modal').classList.remove('open');
+}
+function toggleKeyVis() {
+  const inp = document.getElementById('api-key-input');
+  const btn = document.getElementById('key-toggle');
+  if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'HIDE'; }
+  else { inp.type = 'password'; btn.textContent = 'SHOW'; }
+}
+function saveSettings() {
+  const val = document.getElementById('api-key-input').value.trim();
+  if (val) localStorage.setItem(LS_KEY, val);
+  closeSettings();
+  updateKeyIndicator();
+}
+function clearKey() {
+  localStorage.removeItem(LS_KEY);
+  document.getElementById('api-key-input').value = '';
+  closeSettings();
+  updateKeyIndicator();
+}
+
+// Close modal on Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeSettings();
+});
+
+// ── PWA: Service Worker ───────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      swReg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+      swReg.addEventListener('updatefound', () => {
+        const sw = swReg.installing;
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+            document.getElementById('update-banner').classList.add('show');
+          }
+        });
+      });
+    } catch (e) { console.warn('SW:', e); }
+  });
+}
+function applyUpdate() {
+  document.getElementById('update-banner').classList.remove('show');
+  if (swReg?.waiting) swReg.waiting.postMessage({ type: 'SKIP_WAITING' });
+  location.reload();
+}
+
+// ── PWA: Install prompt ───────────────────────────────────────────────────────
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); installPrompt = e;
+  document.getElementById('install-btn').style.display = 'inline-block';
+});
+window.addEventListener('appinstalled', () => {
+  document.getElementById('install-btn').style.display = 'none'; installPrompt = null;
+});
+async function installPWA() {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  const { outcome } = await installPrompt.userChoice;
+  if (outcome === 'accepted') document.getElementById('install-btn').style.display = 'none';
+  installPrompt = null;
+}
+
+// ── Online / offline ──────────────────────────────────────────────────────────
+window.addEventListener('offline', () => {
+  document.getElementById('offline-banner').classList.add('show');
+  setDot('offline');
+});
+window.addEventListener('online', () => {
+  document.getElementById('offline-banner').classList.remove('show');
+});
+
+function setDot(state) { document.getElementById('status-dot').className = state; }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmt(n, d = 2) {
+  return Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function fmtPct(n) { const v = parseFloat(n); return (v >= 0 ? '+' : '') + v.toFixed(3) + '%'; }
+function colorClass(n) { return parseFloat(n) > 0 ? 'pos' : parseFloat(n) < 0 ? 'neg' : 'neu'; }
+function setPhase(id, state) {
+  const el = document.getElementById(id); if (!el) return;
+  el.className = 'phase-item ' + state;
+  el.querySelector('.phase-icon').textContent = state === 'done' ? '✓' : state === 'active' ? '▶' : '○';
+}
+function showError(msg) {
+  const b = document.getElementById('error-banner');
+  b.textContent = '⚠ ' + msg; b.classList.add('show');
+  setTimeout(() => b.classList.remove('show'), 10000);
+}
+
+// ── Direct API calls ──────────────────────────────────────────────────────────
+async function fetchMarketData() {
+  const [ticker, klines, depth, chain] = await Promise.all([
+    fetch(BINANCE_TICKER).then(r => { if (!r.ok) throw new Error('Binance ticker ' + r.status); return r.json(); }),
+    fetch(BINANCE_KLINES).then(r => { if (!r.ok) throw new Error('Binance klines ' + r.status); return r.json(); }),
+    fetch(BINANCE_DEPTH).then(r  => { if (!r.ok) throw new Error('Binance depth '  + r.status); return r.json(); }),
+    fetch(BLOCKCHAIN_STATS).then(r => r.json()).catch(() => null),
+  ]);
+  return { ticker, klines, depth, chain };
+}
+
+async function callClaude(messages, tools, maxTokens = 1024) {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('No Anthropic API key set. Click ⚙ KEY to configure.');
+
+  const body = { model: ANTHROPIC_MODEL, max_tokens: maxTokens, messages };
+  if (tools) body.tools = tools;
+
+  const res = await fetch(ANTHROPIC_API, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Anthropic API error ${res.status}`);
+  }
+  return res.json();
+}
+
+function extractText(message) {
+  // Find the first text block (may be preceded by tool_use / web_search blocks)
+  for (const block of (message.content || [])) {
+    if (block.type === 'text') return block.text;
+  }
+  return '';
+}
+
+function parseJson(raw) {
+  const cleaned = raw.replace(/```(?:json)?\n?/g, '').trim();
+  try { return JSON.parse(cleaned); } catch {
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (m) return JSON.parse(m[0]);
+    throw new Error('Could not parse JSON response');
+  }
+}
+
+// ── Build prediction prompt ───────────────────────────────────────────────────
+function buildPredictPrompt(data) {
+  const { ticker, klines, depth, chain } = data;
+  const closes = klines.map(k => parseFloat(k[4]));
+  const latest = closes[closes.length - 1];
+  const chg    = parseFloat(ticker.priceChangePercent);
+  const vol24h = parseFloat(ticker.quoteVolume).toFixed(0);
+  const m15  = ((latest - closes[closes.length - 2]) / closes[closes.length - 2] * 100).toFixed(3);
+  const m1h  = ((latest - closes[closes.length - 5]) / closes[closes.length - 5] * 100).toFixed(3);
+  const m6h  = ((latest - closes[closes.length - 25]) / closes[closes.length - 25] * 100).toFixed(3);
+  const m12h = ((latest - closes[0]) / closes[0] * 100).toFixed(3);
+  const bidVol = depth.bids.reduce((s, [, q]) => s + parseFloat(q), 0).toFixed(2);
+  const askVol = depth.asks.reduce((s, [, q]) => s + parseFloat(q), 0).toFixed(2);
+  const bidPct = (parseFloat(bidVol) / (parseFloat(bidVol) + parseFloat(askVol)) * 100).toFixed(1);
+  const chainStr = chain
+    ? `hash_rate=${chain.hash_rate}, difficulty=${chain.difficulty}, mempool_size=${chain.mempool_size}, tps=${chain.transactions_per_second?.toFixed(2)}`
+    : 'unavailable';
+
+  return `You are a professional crypto trading analyst. Analyze Bitcoin and return ONLY a JSON object — no markdown, no commentary.
+
+MARKET DATA:
+- Price: $${latest.toLocaleString()} (24h: ${chg}%)
+- Volume 24h: $${parseInt(vol24h).toLocaleString()}
+- Momentum: 15m=${m15}%, 1h=${m1h}%, 6h=${m6h}%, 12h=${m12h}%, 24h=${chg.toFixed(3)}%
+- Order book: ${bidPct}% bid pressure (bids=${bidVol} BTC, asks=${askVol} BTC)
+- On-chain: ${chainStr}
+- Recent 15m closes: ${closes.slice(-12).map(p => '$' + p.toLocaleString()).join(', ')}
+
+REQUIRED JSON SCHEMA:
+{
+  "trend": { "direction":"BULLISH|BEARISH|SIDEWAYS","strength":"STRONG|MODERATE|WEAK","duration":"<string>","momentum":<0-100>,"key_level":"<price>","description":"<2-3 sentences>" },
+  "pred_15":   { "price":<number>,"direction":"UP|DOWN|NEUTRAL","confidence":<0-100>,"change_pct":<float>,"trend_alignment":"WITH|AGAINST|NEUTRAL" },
+  "pred_hour": { "price":<number>,"direction":"UP|DOWN|NEUTRAL","confidence":<0-100>,"change_pct":<float>,"trend_alignment":"WITH|AGAINST|NEUTRAL" },
+  "signals":  ["<s1>","<s2>","<s3>"],
+  "headlines":["<h1>","<h2>"],
+  "reasoning":"<paragraph>"
+}`;
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+function buildChart(klines) {
+  const labels = klines.map(k => {
+    const d = new Date(k[0]);
+    return d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0');
+  });
+  const closes = klines.map(k => parseFloat(k[4]));
+  const min = Math.min(...closes) * 0.9995;
+  const max = Math.max(...closes) * 1.0005;
+
+  if (priceChart) priceChart.destroy();
+  priceChart = new Chart(document.getElementById('priceChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: closes, borderColor: '#00d4ff', borderWidth: 1.5, fill: true,
+        backgroundColor: ctx => {
+          const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, ctx.chart.height);
+          g.addColorStop(0, 'rgba(0,212,255,.22)'); g.addColorStop(1, 'rgba(0,212,255,0)'); return g;
+        },
+        pointRadius: 0, tension: 0.2,
+      }],
+    },
+    options: {
+      responsive: true, animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index', intersect: false,
+          callbacks: { label: c => ' $' + fmt(c.raw) },
+          backgroundColor: '#0a1520', borderColor: '#1a3a5c', borderWidth: 1,
+          titleColor: '#4a7a9b', bodyColor: '#c8e6f5',
+        },
+      },
+      scales: {
+        x: { grid: { color: '#1a3a5c' }, ticks: { color: '#4a7a9b', maxTicksLimit: 10, font: { family: 'Courier New', size: 10 } } },
+        y: {
+          grid: { color: '#1a3a5c' }, min, max,
+          ticks: { color: '#4a7a9b', font: { family: 'Courier New', size: 10 }, callback: v => '$' + v.toLocaleString() },
+        },
+      },
+    },
+  });
+}
+
+// ── Render market ─────────────────────────────────────────────────────────────
+function renderMarket(data) {
+  const { ticker, klines, depth, chain } = data;
+  const closes = klines.map(k => parseFloat(k[4]));
+  const latest = closes[closes.length - 1];
+  const chg    = parseFloat(ticker.priceChangePercent);
+
+  document.getElementById('price-main').textContent = '$' + fmt(latest);
+  const chgEl = document.getElementById('price-change');
+  chgEl.textContent = fmtPct(chg); chgEl.className = colorClass(chg);
+
+  document.getElementById('stale-badge').classList.toggle('show', !!data.__stale);
+  setDot(data.__stale ? 'stale' : 'live');
+
+  const calcMom = back => (latest - closes[Math.max(0, closes.length - 1 - back)]) /
+                           closes[Math.max(0, closes.length - 1 - back)] * 100;
+  const moms = { '15': calcMom(1), '1h': calcMom(4), '6h': calcMom(24), '12h': calcMom(48), '24h': chg };
+  Object.entries(moms).forEach(([k, v]) => {
+    const el = document.getElementById('mom-' + k);
+    if (el) { el.textContent = fmtPct(v); el.className = 'mom-val ' + colorClass(v); }
+  });
+
+  buildChart(klines);
+
+  const bidVol = depth.bids.reduce((s, [,q]) => s + parseFloat(q), 0);
+  const askVol = depth.asks.reduce((s, [,q]) => s + parseFloat(q), 0);
+  const bidPct = bidVol / (bidVol + askVol) * 100;
+  document.getElementById('ob-bid-bar').style.width = bidPct + '%';
+  document.getElementById('ob-bid-pct').textContent  = bidPct.toFixed(1) + '%';
+  document.getElementById('ob-ask-pct').textContent  = (100 - bidPct).toFixed(1) + '%';
+  document.getElementById('ob-bid-vol').textContent  = fmt(bidVol, 1) + ' BTC';
+  document.getElementById('ob-ask-vol').textContent  = fmt(askVol, 1) + ' BTC';
+
+  if (chain) {
+    document.getElementById('chain-hash').textContent    = chain.hash_rate ? (chain.hash_rate/1e18).toFixed(2)+' EH/s' : '—';
+    document.getElementById('chain-diff').textContent    = chain.difficulty ? (chain.difficulty/1e12).toFixed(2)+' T' : '—';
+    document.getElementById('chain-mempool').textContent = chain.mempool_size ? chain.mempool_size.toLocaleString()+' B' : '—';
+    document.getElementById('chain-tps').textContent     = chain.transactions_per_second ? chain.transactions_per_second.toFixed(2) : '—';
+    document.getElementById('chain-price').textContent   = chain.market_price_usd ? '$'+fmt(chain.market_price_usd) : '—';
+    document.getElementById('chain-blocks').textContent  = chain.n_blocks_mined != null ? chain.n_blocks_mined : '—';
+  }
+}
+
+// ── Render prediction ─────────────────────────────────────────────────────────
+function renderPrediction(pred) {
+  const dir = pred.trend.direction;
+  const dirEl = document.getElementById('trend-direction');
+  dirEl.textContent = dir; dirEl.className = 'trend-direction ' + dir.toLowerCase();
+  const stEl = document.getElementById('trend-strength-tag');
+  stEl.textContent = pred.trend.strength; stEl.className = 'tag ' + pred.trend.strength.toLowerCase();
+  document.getElementById('trend-dur-tag').textContent = pred.trend.duration;
+
+  const mom = Math.min(100, Math.max(0, pred.trend.momentum));
+  const gf  = document.getElementById('gauge-fill');
+  gf.style.width      = mom + '%';
+  gf.style.background = mom > 60 ? 'var(--green)' : mom < 40 ? 'var(--red)' : 'var(--yellow)';
+  document.getElementById('gauge-val').textContent  = mom;
+  document.getElementById('key-level').textContent  = pred.trend.key_level || '—';
+  document.getElementById('trend-desc').textContent = pred.trend.description || '';
+
+  function setPred(prefix, p) {
+    document.getElementById(prefix + '-price').textContent = '$' + fmt(p.price);
+    const chEl = document.getElementById(prefix + '-change');
+    chEl.textContent = fmtPct(p.change_pct) + ' · ' + p.direction;
+    chEl.className   = 'pred-change ' + (p.direction === 'UP' ? 'pos' : p.direction === 'DOWN' ? 'neg' : 'neu');
+    document.getElementById('conf' + (prefix === 'pred15' ? '15' : 'hour') + '-val').textContent  = p.confidence + '%';
+    const cf = document.getElementById('conf' + (prefix === 'pred15' ? '15' : 'hour') + '-fill');
+    cf.style.width      = p.confidence + '%';
+    cf.style.background = p.confidence > 65 ? 'var(--green)' : p.confidence > 40 ? 'var(--cyan)' : 'var(--yellow)';
+    const aEl = document.getElementById('align-' + (prefix === 'pred15' ? '15' : 'hour'));
+    aEl.textContent = p.trend_alignment === 'WITH' ? '↑ WITH TREND' : p.trend_alignment === 'AGAINST' ? '↓ COUNTER TREND' : '→ NEUTRAL';
+    aEl.className   = 'pred-alignment ' + (p.trend_alignment === 'WITH' ? 'align-with' : p.trend_alignment === 'AGAINST' ? 'align-against' : 'align-neutral');
+  }
+  setPred('pred15',   pred.pred_15);
+  setPred('predhour', pred.pred_hour);
+
+  document.getElementById('signals-list').innerHTML =
+    (pred.signals || []).map(s => `<li>${s}</li>`).join('') || '<li class="neu">No signals.</li>';
+  document.getElementById('headline-list').innerHTML =
+    (pred.headlines || []).map(h => `<li>${h}</li>`).join('') || '<li class="neu">No headlines.</li>';
+  document.getElementById('reasoning-text').textContent = pred.reasoning || '—';
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', ['dashboard','backtest'][i] === name));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+// ── Main load ─────────────────────────────────────────────────────────────────
+async function loadAll() {
+  const btn = document.getElementById('refresh-btn');
+  btn.disabled = true; setDot('');
+
+  const overlay = document.getElementById('loading-overlay');
+  overlay.classList.add('show');
+  setPhase('phase-market','active'); setPhase('phase-ai',''); setPhase('phase-render','');
+
+  try {
+    // Phase 1: market data directly from Binance + Blockchain.info
+    cachedMarket = await fetchMarketData();
+    setPhase('phase-market','done');
+
+    // Phase 2: AI prediction via Anthropic API
+    setPhase('phase-ai','active');
+    let prediction = null;
+    if (getApiKey()) {
+      try {
+        const msg = await callClaude(
+          [{ role: 'user', content: buildPredictPrompt(cachedMarket) }],
+          [{ type: 'web_search_20250305', name: 'web_search', max_uses: 1 }],
+          1024
+        );
+        prediction = parseJson(extractText(msg));
+      } catch (e) {
+        showError('AI prediction: ' + e.message);
+      }
+    } else {
+      showError('No API key — market data loaded but AI predictions skipped. Click ⚙ KEY to configure.');
+    }
+    setPhase('phase-ai','done');
+
+    // Phase 3: render
+    setPhase('phase-render','active');
+    renderMarket(cachedMarket);
+    if (prediction) renderPrediction(prediction);
+    setPhase('phase-render','done');
+
+  } catch (e) {
+    showError(e.message); setDot('offline'); console.error(e);
+  } finally {
+    overlay.classList.remove('show'); btn.disabled = false;
+  }
+}
+
+// ── Backtest ──────────────────────────────────────────────────────────────────
+async function runBacktest() {
+  if (!cachedMarket) { showError('Refresh market data first.'); return; }
+  if (!getApiKey())  { showError('No API key set. Click ⚙ KEY to configure.'); return; }
+
+  const btn = document.getElementById('run-backtest');
+  btn.disabled = true; btn.textContent = '⟳ RUNNING…';
+  const ph = document.getElementById('bt-placeholder');
+  ph.textContent = 'Running backtest with Claude AI…'; ph.style.display = 'block';
+  document.getElementById('bt-results').style.display = 'none';
+
+  try {
+    const candles = cachedMarket.klines.map(k => ({
+      t: new Date(k[0]).toISOString().slice(11,16),
+      o: parseFloat(k[1]).toFixed(2), h: parseFloat(k[2]).toFixed(2),
+      l: parseFloat(k[3]).toFixed(2), c: parseFloat(k[4]).toFixed(2),
+      v: parseFloat(k[5]).toFixed(2),
+    }));
+
+    const prompt = `You are a quant analyst. Backtest a simple momentum strategy on these 48x15m BTC candles:
+RULE: Enter LONG when 3 consecutive closes rise; enter SHORT when 3 consecutive closes fall. Exit after 2 candles.
+
+CANDLES (time, open, high, low, close, volume):
+${candles.map(c => `${c.t} O=${c.o} H=${c.h} L=${c.l} C=${c.c} V=${c.v}`).join('\n')}
+
+Return ONLY a JSON object:
+{
+  "trades": [{"entry_time":"HH:MM","direction":"LONG|SHORT","entry_price":number,"exit_price":number,"pnl_pct":float,"result":"WIN|LOSS"}],
+  "summary": {"total_trades":number,"wins":number,"losses":number,"win_rate":float,"total_pnl_pct":float,"avg_win_pct":float,"avg_loss_pct":float,"best_trade_pct":float,"worst_trade_pct":float},
+  "assessment":"<2-3 sentences>"
+}`;
+
+    const msg  = await callClaude([{ role: 'user', content: prompt }], null, 2048);
+    const data = parseJson(extractText(msg));
+    const s    = data.summary;
+    const wr   = parseFloat(s.win_rate);
+    const pnl  = parseFloat(s.total_pnl_pct);
+
+    document.getElementById('bt-total').textContent = s.total_trades;
+    const wrEl = document.getElementById('bt-winrate');
+    wrEl.textContent = (wr * 100).toFixed(1) + '%'; wrEl.className = 'bt-stat-val ' + (wr > 0.5 ? 'pos' : 'neg');
+    const pnlEl = document.getElementById('bt-pnl');
+    pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(3) + '%'; pnlEl.className = 'bt-stat-val ' + (pnl >= 0 ? 'pos' : 'neg');
+    document.getElementById('bt-avgwin').textContent  = '+' + parseFloat(s.avg_win_pct).toFixed(3) + '%';
+    document.getElementById('bt-avgloss').textContent = parseFloat(s.avg_loss_pct).toFixed(3) + '%';
+    document.getElementById('bt-assessment').textContent = data.assessment || '';
+
+    document.getElementById('bt-tbody').innerHTML = (data.trades || []).map(t => `
+      <tr>
+        <td>${t.entry_time}</td>
+        <td style="color:${t.direction==='LONG'?'var(--green)':'var(--red)'}">${t.direction}</td>
+        <td>$${fmt(t.entry_price)}</td>
+        <td>$${fmt(t.exit_price)}</td>
+        <td class="${t.pnl_pct>=0?'pos':'neg'}">${t.pnl_pct>=0?'+':''}${parseFloat(t.pnl_pct).toFixed(3)}%</td>
+        <td class="${t.result==='WIN'?'win-badge':'loss-badge'}">${t.result}</td>
+      </tr>`).join('');
+
+    ph.style.display = 'none';
+    document.getElementById('bt-results').style.display = 'block';
+  } catch (e) {
+    showError(e.message); ph.textContent = 'Backtest failed: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ RUN BACKTEST';
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  updateKeyIndicator();
+  loadAll();
+});
+</script>
+</body>
+</html>

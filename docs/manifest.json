@@ -1,0 +1,45 @@
+{
+  "name": "BTC Terminal",
+  "short_name": "BTC",
+  "description": "Live Bitcoin analysis dashboard with AI-powered predictions",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#050a0f",
+  "theme_color": "#050a0f",
+  "orientation": "any",
+  "categories": ["finance", "utilities"],
+  "icons": [
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Refresh Data",
+      "url": "./",
+      "description": "Open live BTC dashboard"
+    }
+  ]
+}
